@@ -42,6 +42,12 @@ function commandLooksLike(command: string, expected: string): boolean {
   return base === expected || base === `${expected}.cmd` || base === `${expected}.exe`;
 }
 
+function stripInheritedClaudeApiKey(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.ANTHROPIC_API_KEY;
+  return next;
+}
+
 function summarizeProbeDetail(stdout: string, stderr: string): string | null {
   const raw = firstNonEmptyLine(stderr) || firstNonEmptyLine(stdout);
   if (!raw) return null;
@@ -79,7 +85,7 @@ export async function testEnvironment(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  const runtimeEnv = ensurePathInEnv({ ...stripInheritedClaudeApiKey(process.env), ...env });
   try {
     await ensureCommandResolvable(command, cwd, runtimeEnv);
     checks.push({
@@ -120,15 +126,22 @@ export async function testEnvironment(
       detail: `Detected in ${source}.`,
       hint: "Ensure AWS credentials (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or AWS_PROFILE) and AWS_REGION are configured.",
     });
-  } else if (isNonEmpty(configApiKey) || isNonEmpty(hostApiKey)) {
-    const source = isNonEmpty(configApiKey) ? "adapter config env" : "server environment";
+  } else if (isNonEmpty(configApiKey)) {
     checks.push({
       code: "claude_anthropic_api_key_overrides_subscription",
       level: "warn",
       message:
         "ANTHROPIC_API_KEY is set. Claude will use API-key auth instead of subscription credentials.",
-      detail: `Detected in ${source}.`,
+      detail: "Detected in adapter config env.",
       hint: "Unset ANTHROPIC_API_KEY if you want subscription-based Claude login behavior.",
+    });
+  } else if (isNonEmpty(hostApiKey)) {
+    checks.push({
+      code: "claude_inherited_anthropic_api_key_ignored",
+      level: "info",
+      message:
+        "ANTHROPIC_API_KEY is set in the server environment, but claude_local will ignore inherited API keys and use subscription credentials when Claude is logged in.",
+      detail: "Set ANTHROPIC_API_KEY in this adapter's env only when you intentionally want API-key billing.",
     });
   } else {
     checks.push({
@@ -182,6 +195,7 @@ export async function testEnvironment(
           timeoutSec: 45,
           graceSec: 5,
           stdin: "Respond with hello.",
+          scrubInheritedEnvKeys: ["ANTHROPIC_API_KEY"],
           onLog: async () => {},
         },
       );

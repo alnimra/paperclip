@@ -81,6 +81,12 @@ function resolveCodexBillingType(env: Record<string, string>): "api" | "subscrip
   return hasNonEmptyEnvValue(env, "OPENAI_API_KEY") ? "api" : "subscription";
 }
 
+function stripInheritedOpenAiApiKey(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.OPENAI_API_KEY;
+  return next;
+}
+
 function resolveCodexBiller(env: Record<string, string>, billingType: "api" | "subscription"): string {
   const openAiCompatibleBiller = inferOpenAiCompatibleBiller(env, "openai");
   if (openAiCompatibleBiller === "openrouter") return "openrouter";
@@ -457,7 +463,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     env.PAPERCLIP_API_KEY = authToken;
   }
   const effectiveEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...env }).filter(
+    Object.entries({ ...stripInheritedOpenAiApiKey(process.env), ...env }).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -651,6 +657,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timeoutSec,
       graceSec,
       onSpawn,
+      scrubInheritedEnvKeys: ["OPENAI_API_KEY"],
       onLog: async (stream, chunk) => {
         if (stream !== "stderr") {
           await onLog(stream, chunk);

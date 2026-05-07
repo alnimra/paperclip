@@ -72,6 +72,7 @@ export interface AdapterExecutionTargetProcessOptions {
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
   terminalResultCleanup?: TerminalResultCleanupOptions;
+  scrubInheritedEnvKeys?: string[];
 }
 
 export interface AdapterExecutionTargetShellOptions {
@@ -216,6 +217,7 @@ export async function runAdapterExecutionTargetProcess(
     onSpawn: options.onSpawn,
     terminalResultCleanup: options.terminalResultCleanup,
     remoteExecution: adapterExecutionTargetToRemoteSpec(target),
+    scrubInheritedEnvKeys: options.scrubInheritedEnvKeys,
   });
 }
 

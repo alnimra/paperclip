@@ -70,6 +70,41 @@ describe("codex_local environment diagnostics", () => {
     }
   });
 
+  it("ignores OPENAI_API_KEY inherited from the host when native Codex auth exists", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-host-value");
+    const root = path.join(
+      os.tmpdir(),
+      `paperclip-codex-host-key-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const codexHome = path.join(root, ".codex");
+    const cwd = path.join(root, "workspace");
+
+    try {
+      await fs.mkdir(codexHome, { recursive: true });
+      await fs.writeFile(
+        path.join(codexHome, "auth.json"),
+        JSON.stringify({ accessToken: "fake-token", accountId: "acct-1" }),
+      );
+
+      const result = await testEnvironment({
+        companyId: "company-1",
+        adapterType: "codex_local",
+        config: {
+          command: process.execPath,
+          cwd,
+          env: { CODEX_HOME: codexHome },
+        },
+      });
+
+      expect(result.status).toBe("pass");
+      expect(result.checks.some((check) => check.code === "codex_native_auth_present")).toBe(true);
+      expect(result.checks.some((check) => check.code === "codex_inherited_openai_api_key_ignored")).toBe(true);
+      expect(result.checks.some((check) => check.code === "codex_openai_api_key_present")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("emits codex_openai_api_key_missing when neither env var nor native auth exists", async () => {
     const root = path.join(
       os.tmpdir(),

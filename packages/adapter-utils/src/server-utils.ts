@@ -1470,12 +1470,17 @@ export async function runChildProcess(
     terminalResultCleanup?: TerminalResultCleanupOptions;
     stdin?: string;
     remoteExecution?: RemoteExecutionSpec | null;
+    scrubInheritedEnvKeys?: string[];
   },
 ): Promise<RunProcessResult> {
   const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
   return new Promise<RunProcessResult>((resolve, reject) => {
+    const inheritedEnv = sanitizeInheritedPaperclipEnv(process.env);
+    for (const key of opts.scrubInheritedEnvKeys ?? []) {
+      delete inheritedEnv[key];
+    }
     const rawMerged: NodeJS.ProcessEnv = {
-      ...sanitizeInheritedPaperclipEnv(process.env),
+      ...inheritedEnv,
       ...opts.env,
     };
 

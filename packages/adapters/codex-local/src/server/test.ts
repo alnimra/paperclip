@@ -40,6 +40,12 @@ function commandLooksLike(command: string, expected: string): boolean {
   return base === expected || base === `${expected}.cmd` || base === `${expected}.exe`;
 }
 
+function stripInheritedOpenAiApiKey(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.OPENAI_API_KEY;
+  return next;
+}
+
 function summarizeProbeDetail(stdout: string, stderr: string, parsedError: string | null): string | null {
   const raw = parsedError?.trim() || firstNonEmptyLine(stderr) || firstNonEmptyLine(stdout);
   if (!raw) return null;
@@ -80,7 +86,7 @@ export async function testEnvironment(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  const runtimeEnv = ensurePathInEnv({ ...stripInheritedOpenAiApiKey(process.env), ...env });
   try {
     await ensureCommandResolvable(command, cwd, runtimeEnv);
     checks.push({
@@ -99,13 +105,12 @@ export async function testEnvironment(
 
   const configOpenAiKey = env.OPENAI_API_KEY;
   const hostOpenAiKey = process.env.OPENAI_API_KEY;
-  if (isNonEmpty(configOpenAiKey) || isNonEmpty(hostOpenAiKey)) {
-    const source = isNonEmpty(configOpenAiKey) ? "adapter config env" : "server environment";
+  if (isNonEmpty(configOpenAiKey)) {
     checks.push({
       code: "codex_openai_api_key_present",
       level: "info",
       message: "OPENAI_API_KEY is set for Codex authentication.",
-      detail: `Detected in ${source}.`,
+      detail: "Detected in adapter config env.",
     });
   } else {
     const codexHome = isNonEmpty(env.CODEX_HOME) ? env.CODEX_HOME : undefined;
@@ -123,6 +128,15 @@ export async function testEnvironment(
         level: "warn",
         message: "OPENAI_API_KEY is not set. Codex runs may fail until authentication is configured.",
         hint: "Set OPENAI_API_KEY in adapter env, shell environment, or run `codex auth` to log in.",
+      });
+    }
+    if (isNonEmpty(hostOpenAiKey)) {
+      checks.push({
+        code: "codex_inherited_openai_api_key_ignored",
+        level: "info",
+        message:
+          "OPENAI_API_KEY is set in the server environment, but codex_local will ignore inherited API keys and use native Codex auth when available.",
+        detail: "Set OPENAI_API_KEY in this adapter's env only when you intentionally want API-key billing.",
       });
     }
   }
@@ -160,6 +174,7 @@ export async function testEnvironment(
           timeoutSec: 45,
           graceSec: 5,
           stdin: "Respond with hello.",
+          scrubInheritedEnvKeys: ["OPENAI_API_KEY"],
           onLog: async () => {},
         },
       );

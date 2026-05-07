@@ -106,6 +106,12 @@ function resolveClaudeBillingType(env: Record<string, string>): "api" | "subscri
   return hasNonEmptyEnvValue(env, "ANTHROPIC_API_KEY") ? "api" : "subscription";
 }
 
+function stripInheritedClaudeApiKey(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.ANTHROPIC_API_KEY;
+  return next;
+}
+
 async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<ClaudeRuntimeConfig> {
   const { runId, agent, config, context, executionTarget, authToken } = input;
 
@@ -230,7 +236,7 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
     env.PAPERCLIP_API_KEY = authToken;
   }
 
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  const runtimeEnv = ensurePathInEnv({ ...stripInheritedClaudeApiKey(process.env), ...env });
   await ensureAdapterExecutionTargetCommandResolvable(command, executionTarget, cwd, runtimeEnv);
   const resolvedCommand = await resolveAdapterExecutionTargetCommandForLogs(command, executionTarget, cwd, runtimeEnv);
   const loggedEnv = buildInvocationEnvForLogs(env, {
@@ -284,6 +290,7 @@ export async function runClaudeLogin(input: {
     env: runtime.env,
     timeoutSec: runtime.timeoutSec,
     graceSec: runtime.graceSec,
+    scrubInheritedEnvKeys: ["ANTHROPIC_API_KEY"],
     onLog,
   });
 
@@ -345,7 +352,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     asNumber(config.terminalResultCleanupGraceMs, 5_000),
   );
   const effectiveEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...env }).filter(
+    Object.entries({ ...stripInheritedClaudeApiKey(process.env), ...env }).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -567,6 +574,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       graceSec,
       onSpawn,
       onLog,
+      scrubInheritedEnvKeys: ["ANTHROPIC_API_KEY"],
       terminalResultCleanup: {
         graceMs: terminalResultCleanupGraceMs,
         hasTerminalResult: ({ stdout }) => parseClaudeStreamJson(stdout).resultJson !== null,

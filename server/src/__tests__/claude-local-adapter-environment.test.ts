@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe("claude_local environment diagnostics", () => {
-  it("returns a warning (not an error) when ANTHROPIC_API_KEY is set in host environment", async () => {
+  it("ignores ANTHROPIC_API_KEY inherited from the host environment", async () => {
     delete process.env.CLAUDE_CODE_USE_BEDROCK;
     delete process.env.ANTHROPIC_BEDROCK_BASE_URL;
     process.env.ANTHROPIC_API_KEY = "sk-test-host";
@@ -41,14 +41,15 @@ describe("claude_local environment diagnostics", () => {
       },
     });
 
-    expect(result.status).toBe("warn");
+    expect(result.status).toBe("pass");
     expect(
       result.checks.some(
         (check) =>
-          check.code === "claude_anthropic_api_key_overrides_subscription" &&
-          check.level === "warn",
+          check.code === "claude_inherited_anthropic_api_key_ignored" &&
+          check.level === "info",
       ),
     ).toBe(true);
+    expect(result.checks.some((check) => check.code === "claude_anthropic_api_key_overrides_subscription")).toBe(false);
     expect(result.checks.some((check) => check.level === "error")).toBe(false);
   });
 
