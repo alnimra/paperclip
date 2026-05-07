@@ -81,6 +81,11 @@ import {
   normalizeIssueExecutionPolicy,
   parseIssueExecutionState,
 } from "../services/issue-execution-policy.js";
+import {
+  isIssueRoutingHookBypassed,
+  queueIssueRoutingHook,
+  shouldRouteIssueUpdate,
+} from "../services/issue-routing-hook.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
@@ -1855,6 +1860,9 @@ export function issueRoutes(
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
     });
+    if (!isIssueRoutingHookBypassed(req)) {
+      queueIssueRoutingHook({ event: "issue.created", issue, actor });
+    }
 
     res.status(201).json({
       ...issue,
@@ -1916,6 +1924,9 @@ export function issueRoutes(
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
     });
+    if (!isIssueRoutingHookBypassed(req)) {
+      queueIssueRoutingHook({ event: "issue.child_created", issue, actor });
+    }
 
     res.status(201).json(issue);
   });
@@ -2684,6 +2695,9 @@ export function issueRoutes(
           .catch((err) => logger.warn({ err, issueId: issue.id, agentId }, "failed to wake agent on issue update"));
       }
     })();
+    if (!isIssueRoutingHookBypassed(req) && shouldRouteIssueUpdate(req.body)) {
+      queueIssueRoutingHook({ event: "issue.updated", issue, actor });
+    }
 
     res.json({ ...issueResponse, comment });
   });
