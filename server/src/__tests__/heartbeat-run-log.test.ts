@@ -12,6 +12,23 @@ describe("compactRunLogChunk", () => {
     expect(compacted).toContain("[omitted base64 image data: 4096 chars]");
   });
 
+  it("redacts sensitive auth tokens from run logs", () => {
+    const chunk = [
+      "PAPERCLIP_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.signature",
+      "Authorization: Bearer sk-abc123",
+      "x-openclaw-token: secret123",
+    ].join("\n");
+
+    const compacted = compactRunLogChunk(chunk);
+
+    expect(compacted).not.toContain("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
+    expect(compacted).not.toContain("sk-abc123");
+    expect(compacted).not.toContain("secret123");
+    expect(compacted).toContain("PAPERCLIP_API_KEY=***REDACTED***");
+    expect(compacted).toContain("Authorization: Bearer ***REDACTED***");
+    expect(compacted).toContain("x-openclaw-token: ***REDACTED***");
+  });
+
   it("truncates oversized chunks after sanitizing them", () => {
     const chunk = `${"x".repeat(90_000)}tail`;
 

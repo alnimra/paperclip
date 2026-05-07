@@ -837,8 +837,27 @@ function redactInlineBase64ImageData(chunk: string) {
   );
 }
 
+function redactSensitiveRunLogData(chunk: string) {
+  // The run log stream can contain raw environment dumps and HTTP headers if an agent
+  // prints them. Redact the most sensitive tokens to avoid leaking credentials into
+  // persisted logs, excerpts, and the UI.
+  //
+  // Keep this conservative and targeted. Do not attempt to redact arbitrary "token-like"
+  // strings; focus on well-known keys and header patterns.
+  return chunk
+    // Env-style dumps
+    .replace(/\b(PAPERCLIP_API_KEY=)(\S+)/g, "$1***REDACTED***")
+    .replace(/\b(OPENAI_API_KEY=)(\S+)/g, "$1***REDACTED***")
+    .replace(/\b(ANTHROPIC_API_KEY=)(\S+)/g, "$1***REDACTED***")
+    .replace(/\b(CLAUDE_CODE_OAUTH_TOKEN=)(\S+)/g, "$1***REDACTED***")
+    // Common header shapes
+    .replace(/\b(Authorization:\s*Bearer\s+)(\S+)/gi, "$1***REDACTED***")
+    .replace(/\b(x-openclaw-token:\s*)(\S+)/gi, "$1***REDACTED***")
+    .replace(/\b(x-openclaw-auth:\s*)(\S+)/gi, "$1***REDACTED***");
+}
+
 export function compactRunLogChunk(chunk: string, maxChars = MAX_PERSISTED_LOG_CHUNK_CHARS) {
-  const normalized = redactInlineBase64ImageData(chunk);
+  const normalized = redactInlineBase64ImageData(redactSensitiveRunLogData(chunk));
   if (normalized.length <= maxChars) return normalized;
 
   const headChars = Math.max(0, Math.floor(maxChars * 0.6));
