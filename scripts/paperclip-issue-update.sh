@@ -5,7 +5,9 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/paperclip-issue-update.sh [--issue-id ID] [--status STATUS] [--comment TEXT] [--dry-run]
+  scripts/paperclip-issue-update.sh [--issue-id ID] [--status STATUS] [--comment TEXT] \
+    [--assignee-agent-id ID] [--project-id ID] [--goal-id ID] [--parent-id ID] \
+    [--blocked-by-issue-id ID ...] [--blocked-by-issue-ids ID1,ID2,...] [--dry-run]
 
 Reads a multiline markdown comment from stdin when stdin is piped. This preserves
 newlines when building the JSON payload for PATCH /api/issues/{issueId}.
@@ -16,6 +18,18 @@ Examples:
 
   - Pulled the raw comment body
   - Comparing it with the run transcript
+  MD
+
+  # Blocked with explicit dependencies (repeatable):
+  scripts/paperclip-issue-update.sh --issue-id "$PAPERCLIP_TASK_ID" --status blocked \
+    --blocked-by-issue-id "AFI-123" --blocked-by-issue-id "AFI-124" <<'MD'
+  Blocked on dependencies.
+  MD
+
+  # Blocked with comma-separated dependencies:
+  scripts/paperclip-issue-update.sh --issue-id "$PAPERCLIP_TASK_ID" --status blocked \
+    --blocked-by-issue-ids "AFI-123,AFI-124" <<'MD'
+  Blocked on dependencies.
   MD
 
   scripts/paperclip-issue-update.sh --issue-id "$PAPERCLIP_TASK_ID" --status done --dry-run <<'MD'
@@ -36,6 +50,11 @@ require_command() {
 issue_id="${PAPERCLIP_TASK_ID:-}"
 status=""
 comment_arg=""
+assignee_agent_id=""
+project_id=""
+goal_id=""
+parent_id=""
+blocked_by_issue_ids=()
 dry_run=0
 
 while [[ $# -gt 0 ]]; do
@@ -51,6 +70,44 @@ while [[ $# -gt 0 ]]; do
     --comment)
       comment_arg="${2:-}"
       shift 2
+      ;;
+    --assignee-agent-id)
+      assignee_agent_id="${2:-}"
+      shift 2
+      ;;
+    --project-id)
+      project_id="${2:-}"
+      shift 2
+      ;;
+    --goal-id)
+      goal_id="${2:-}"
+      shift 2
+      ;;
+    --parent-id)
+      parent_id="${2:-}"
+      shift 2
+      ;;
+    --blocked-by-issue-id)
+      blocked_by_issue_ids+=("${2:-}")
+      shift 2
+      ;;
+    --blocked-by-issue-ids)
+      raw_ids="${2:-}"
+      shift 2
+      if [[ -z "$raw_ids" ]]; then
+        printf 'Empty value passed to --blocked-by-issue-ids.\n' >&2
+        exit 1
+      fi
+      IFS=',' read -r -a parsed_ids <<< "$raw_ids"
+      for id in "${parsed_ids[@]}"; do
+        # Trim whitespace around each token.
+        id="${id#"${id%%[![:space:]]*}"}"
+        id="${id%"${id##*[![:space:]]}"}"
+        if [[ -z "$id" ]]; then
+          continue
+        fi
+        blocked_by_issue_ids+=("$id")
+      done
       ;;
     --dry-run)
       dry_run=1
@@ -73,6 +130,15 @@ if [[ -z "$issue_id" ]]; then
   exit 1
 fi
 
+if ((${#blocked_by_issue_ids[@]} > 0)); then
+  for value in "${blocked_by_issue_ids[@]}"; do
+    if [[ -z "$value" ]]; then
+      printf 'Empty value passed to --blocked-by-issue-id.\n' >&2
+      exit 1
+    fi
+  done
+fi
+
 comment=""
 if [[ -n "$comment_arg" ]]; then
   comment="$comment_arg"
@@ -82,13 +148,36 @@ fi
 
 require_command jq
 
+blocked_by_issue_ids_json="$(
+  if ((${#blocked_by_issue_ids[@]} > 0)); then
+    printf '%s\n' "${blocked_by_issue_ids[@]}" | jq -R -s 'split("\n") | map(select(length > 0))'
+  else
+    printf 'null'
+  fi
+)"
+
 payload="$(
   jq -nc \
     --arg status "$status" \
     --arg comment "$comment" \
+    --arg assigneeAgentId "$assignee_agent_id" \
+    --arg projectId "$project_id" \
+    --arg goalId "$goal_id" \
+    --arg parentId "$parent_id" \
+    --argjson blockedByIssueIds "$blocked_by_issue_ids_json" \
     '
       (if $status == "" then {} else {status: $status} end) +
       (if $comment == "" then {} else {comment: $comment} end)
+      +
+      (if $assigneeAgentId == "" then {} else {assigneeAgentId: $assigneeAgentId} end)
+      +
+      (if $projectId == "" then {} else {projectId: $projectId} end)
+      +
+      (if $goalId == "" then {} else {goalId: $goalId} end)
+      +
+      (if $parentId == "" then {} else {parentId: $parentId} end)
+      +
+      (if $blockedByIssueIds == null then {} else {blockedByIssueIds: $blockedByIssueIds} end)
     '
 )"
 
@@ -97,14 +186,37 @@ if [[ "$dry_run" == "1" ]]; then
   exit 0
 fi
 
-if [[ -z "${PAPERCLIP_API_URL:-}" || -z "${PAPERCLIP_API_KEY:-}" || -z "${PAPERCLIP_RUN_ID:-}" ]]; then
-  printf 'Missing PAPERCLIP_API_URL, PAPERCLIP_API_KEY, or PAPERCLIP_RUN_ID.\n' >&2
+if [[ -z "${PAPERCLIP_API_URL:-}" ]]; then
+  printf 'Missing PAPERCLIP_API_URL.\n' >&2
   exit 1
 fi
 
-curl -sS -X PATCH \
-  "$PAPERCLIP_API_URL/api/issues/$issue_id" \
-  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
-  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
-  -H 'Content-Type: application/json' \
-  --data-binary "$payload"
+if [[ -n "${PAPERCLIP_API_KEY:-}" ]]; then
+  if [[ -n "${PAPERCLIP_RUN_ID:-}" ]]; then
+    curl -sS -X PATCH \
+      "$PAPERCLIP_API_URL/api/issues/$issue_id" \
+      -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+      -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$payload"
+  else
+    curl -sS -X PATCH \
+      "$PAPERCLIP_API_URL/api/issues/$issue_id" \
+      -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$payload"
+  fi
+else
+  if [[ -n "${PAPERCLIP_RUN_ID:-}" ]]; then
+    curl -sS -X PATCH \
+      "$PAPERCLIP_API_URL/api/issues/$issue_id" \
+      -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$payload"
+  else
+    curl -sS -X PATCH \
+      "$PAPERCLIP_API_URL/api/issues/$issue_id" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$payload"
+  fi
+fi

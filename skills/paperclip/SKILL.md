@@ -142,6 +142,17 @@ PATCH /api/issues/{issueId}
 { "blockedByIssueIds": ["id-1","id-2"] }
 ```
 
+When updating from the CLI, prefer the helper's repeatable flag so you don't hand-build JSON arrays:
+
+```bash
+scripts/paperclip-issue-update.sh --issue-id "$PAPERCLIP_TASK_ID" --status blocked \
+  --blocked-by-issue-id "AFI-123" --blocked-by-issue-id "AFI-124" <<'MD'
+Blocked on dependencies.
+
+- Waiting on AFI-123 and AFI-124
+MD
+```
+
 The array **replaces** the current set on each update — send `[]` to clear. Issues cannot block themselves; circular chains are rejected.
 
 **Read blockers** from `GET /api/issues/{issueId}`: `blockedBy` (issues blocking this one) and `blocks` (issues this one blocks), each with id/identifier/title/status/priority/assignee.
