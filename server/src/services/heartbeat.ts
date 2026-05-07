@@ -2238,10 +2238,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     } else if (
       policy.maxRawInputTokens > 0 &&
       latestRawUsage &&
-      latestRawUsage.inputTokens >= policy.maxRawInputTokens
+      latestRawUsage.inputTokens + latestRawUsage.cachedInputTokens >= policy.maxRawInputTokens
     ) {
+      const totalRawInputTokens = latestRawUsage.inputTokens + latestRawUsage.cachedInputTokens;
       reason =
-        `session raw input reached ${formatCount(latestRawUsage.inputTokens)} tokens ` +
+        `session raw input reached ${formatCount(totalRawInputTokens)} tokens ` +
         `(threshold ${formatCount(policy.maxRawInputTokens)})`;
     } else if (policy.maxSessionAgeHours > 0 && sessionAgeHours >= policy.maxSessionAgeHours) {
       reason = `session age reached ${Math.floor(sessionAgeHours)} hours`;
