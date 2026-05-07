@@ -28,6 +28,10 @@ function formatFastModeSupportedModels(): string {
   return `${CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS.join(", ")} or manually configured model IDs`;
 }
 
+function isCodexSparkModel(model: string): boolean {
+  return /(?:^|[-_])spark(?:$|[-_])/i.test(model);
+}
+
 export function buildCodexExecArgs(
   config: unknown,
   options: { resumeSessionId?: string | null } = {},
@@ -53,6 +57,9 @@ export function buildCodexExecArgs(
   if (model) args.push("--model", model);
   if (modelReasoningEffort) {
     args.push("-c", `model_reasoning_effort=${JSON.stringify(modelReasoningEffort)}`);
+  }
+  if (isCodexSparkModel(model)) {
+    args.push("-c", 'model_reasoning_summary="none"');
   }
   if (fastModeApplied) {
     args.push("-c", 'service_tier="fast"', "-c", "features.fast_mode=true");

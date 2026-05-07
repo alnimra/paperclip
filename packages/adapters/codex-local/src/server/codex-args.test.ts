@@ -67,4 +67,23 @@ describe("buildCodexExecArgs", () => {
       "-",
     ]);
   });
+
+  it("disables reasoning summaries for Spark models", () => {
+    const result = buildCodexExecArgs({
+      model: "gpt-5.3-codex-spark",
+      reasoningEffort: "low",
+    });
+
+    expect(result.args).toEqual([
+      "exec",
+      "--json",
+      "--model",
+      "gpt-5.3-codex-spark",
+      "-c",
+      'model_reasoning_effort="low"',
+      "-c",
+      'model_reasoning_summary="none"',
+      "-",
+    ]);
+  });
 });
