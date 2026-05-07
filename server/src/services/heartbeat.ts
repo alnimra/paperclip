@@ -7553,6 +7553,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       let enqueued = 0;
       let skipped = 0;
 
+      const dueAgents: Array<typeof agents.$inferSelect> = [];
+
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
         const policy = parseHeartbeatPolicy(agent);
@@ -7563,16 +7565,79 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const elapsedMs = now.getTime() - baseline;
         if (elapsedMs < policy.intervalSec * 1000) continue;
 
+        dueAgents.push(agent);
+      }
+
+      if (dueAgents.length === 0) {
+        return { checked, enqueued, skipped };
+      }
+
+      // Guardrail: Do not spend model credits on empty timer ticks.
+      // Only enqueue timer heartbeats when the agent has actionable assigned work.
+      // Also attach the chosen issueId so the wake can resolve the correct workspace.
+      const dueAgentIds = dueAgents.map((agent) => agent.id);
+      const actionableStatuses: string[] = ["in_progress", "in_review", "todo"];
+
+      const statusRank = sql`case ${issues.status}
+        when 'in_progress' then 0
+        when 'in_review' then 1
+        when 'todo' then 2
+        else 3
+      end`;
+      const priorityRank = sql`case ${issues.priority}
+        when 'critical' then 0
+        when 'high' then 1
+        when 'medium' then 2
+        when 'low' then 3
+        else 4
+      end`;
+
+      const topIssueRows = await db
+        .selectDistinctOn([issues.assigneeAgentId], {
+          assigneeAgentId: issues.assigneeAgentId,
+          issueId: issues.id,
+        })
+        .from(issues)
+        .where(
+          and(
+            inArray(issues.assigneeAgentId, dueAgentIds),
+            inArray(issues.status, actionableStatuses),
+          ),
+        )
+        .orderBy(
+          issues.assigneeAgentId,
+          asc(statusRank),
+          asc(priorityRank),
+          desc(issues.updatedAt),
+          desc(issues.id),
+        );
+
+      const topIssueIdByAgentId = new Map<string, string>();
+      for (const row of topIssueRows) {
+        if (!row.assigneeAgentId) continue;
+        topIssueIdByAgentId.set(row.assigneeAgentId, row.issueId);
+      }
+
+      for (const agent of dueAgents) {
+        const issueId = topIssueIdByAgentId.get(agent.id);
+        if (!issueId) {
+          skipped += 1;
+          continue;
+        }
+
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
           triggerDetail: "system",
           reason: "heartbeat_timer",
+          payload: { issueId, mutation: "timer" },
           requestedByActorType: "system",
           requestedByActorId: "heartbeat_scheduler",
           contextSnapshot: {
             source: "scheduler",
             reason: "interval_elapsed",
             now: now.toISOString(),
+            issueId,
+            taskId: issueId,
           },
         });
         if (run) enqueued += 1;

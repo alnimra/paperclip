@@ -91,6 +91,10 @@ function runIssueRoutingHook(input: IssueRoutingHookInput, command: string): voi
   }
 
   runningHooks.add(key);
+  // The server can be configured with a public/remote PAPERCLIP_API_URL (e.g. a Tailscale hostname)
+  // for UI and agent processes. The routing hook runs locally alongside the server, so it should
+  // prefer the runtime loopback URL when available to avoid DNS/network dependency.
+  const routingApiUrl = process.env.PAPERCLIP_RUNTIME_API_URL?.trim() || process.env.PAPERCLIP_API_URL?.trim() || "";
   const timeoutMs = parsePositiveInt(process.env.PAPERCLIP_ISSUE_ROUTER_TIMEOUT_MS, 30_000);
   const issueRef = input.issue.identifier ?? input.issue.id;
   let stdout = "";
@@ -100,6 +104,7 @@ function runIssueRoutingHook(input: IssueRoutingHookInput, command: string): voi
   const child = spawn("/bin/sh", ["-lc", command], {
     env: {
       ...process.env,
+      ...(routingApiUrl ? { PAPERCLIP_API_URL: routingApiUrl } : {}),
       PAPERCLIP_ROUTING_HOOK: "1",
       PAPERCLIP_ISSUE_ID: issueRef,
       PAPERCLIP_ISSUE_UUID: input.issue.id,
