@@ -381,8 +381,6 @@ export function IssueProperties({
   const assignee = issue.assigneeAgentId
     ? agents?.find((a) => a.id === issue.assigneeAgentId)
     : null;
-  const statusPickerDisabledForExecutionStage =
-    issue.status === "in_review" && issue.executionState?.status === "pending";
   const reviewerValues = stageParticipantValues(issue.executionPolicy, "review");
   const approverValues = stageParticipantValues(issue.executionPolicy, "approval");
   const userLabel = (userId: string | null | undefined) => formatAssigneeUserLabel(userId, currentUserId, userLabelMap);
@@ -1047,7 +1045,7 @@ export function IssueProperties({
           <StatusIcon
             status={issue.status}
             blockerAttention={issue.blockerAttention}
-            onChange={statusPickerDisabledForExecutionStage ? undefined : (status) => onUpdate({ status })}
+            onChange={(status) => onUpdate({ status })}
             showLabel
           />
         </PropertyRow>
