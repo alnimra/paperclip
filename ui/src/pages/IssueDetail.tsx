@@ -1376,13 +1376,28 @@ export function IssueDetail() {
   );
 
   const suggestedAssigneeValue = useMemo(
-    () =>
-      suggestedCommentAssigneeValue(
+    () => {
+      // The chat composer supports "comment + reassign" by defaulting the assignee picker
+      // to a suggested target (often the last commenter). That works for normal handoffs,
+      // but it breaks execution-policy review/approval stages:
+      // - During an active stage, the issue assignee is the currentParticipant (reviewer/approver).
+      // - Auto-suggesting reassignment to a non-participant causes the UI to PATCH assignee fields
+      //   alongside the comment, which the execution-policy rejects with 422:
+      //   "Only the active reviewer or approver can advance the current execution stage".
+      //
+      // For in_review issues with a pending execution stage, do not auto-suggest reassignment.
+      // Users can still explicitly approve (`status: done`) or request changes (`status: in_progress`)
+      // via the normal controls; plain comments should just post a comment.
+      if (issue?.status === "in_review" && issue.executionState?.status === "pending") {
+        return actualAssigneeValue;
+      }
+      return suggestedCommentAssigneeValue(
         issue ?? {},
         mergeIssueComments(comments ?? [], optimisticComments),
         currentUserId,
-      ),
-    [issue, comments, optimisticComments, currentUserId],
+      );
+    },
+    [issue, comments, optimisticComments, currentUserId, actualAssigneeValue],
   );
 
   const threadComments = useMemo(
