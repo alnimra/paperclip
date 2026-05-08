@@ -578,6 +578,53 @@ describe("issue execution policy transitions", () => {
       // No error — just no patch modifications
       expect(result.patch).toEqual({});
     });
+
+    it("active participant can return a pending stage to the original assignee with a comment", () => {
+      const approvalPolicy = approvalOnlyPolicy();
+      const approvalStageId = approvalPolicy.stages[0].id;
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_review",
+          assigneeAgentId: null,
+          assigneeUserId: ctoUserId,
+          executionPolicy: approvalPolicy,
+          executionState: {
+            status: "pending",
+            currentStageId: approvalStageId,
+            currentStageIndex: 0,
+            currentStageType: "approval",
+            currentParticipant: { type: "user", userId: ctoUserId },
+            returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [],
+            lastDecisionId: null,
+            lastDecisionOutcome: null,
+          },
+        },
+        policy: approvalPolicy,
+        requestedStatus: undefined,
+        requestedAssigneePatch: { assigneeAgentId: coderAgentId, assigneeUserId: null },
+        actor: { userId: ctoUserId },
+        commentBody: "Please revise this.",
+      });
+
+      expect(result.patch.status).toBe("in_progress");
+      expect(result.patch.assigneeAgentId).toBe(coderAgentId);
+      expect(result.patch.assigneeUserId).toBeNull();
+      expect(result.patch.executionState).toMatchObject({
+        status: "changes_requested",
+        currentStageId: approvalStageId,
+        currentStageType: "approval",
+        returnAssignee: { type: "agent", agentId: coderAgentId },
+        lastDecisionOutcome: "changes_requested",
+      });
+      expect(result.decision).toEqual({
+        stageId: approvalStageId,
+        stageType: "approval",
+        outcome: "changes_requested",
+        body: "Please revise this.",
+      });
+      expect(result.workflowControlledAssignment).toBe(true);
+    });
   });
 
   describe("comment requirements", () => {

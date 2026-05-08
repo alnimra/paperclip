@@ -453,6 +453,32 @@ export function applyIssueExecutionPolicyTransition(input: TransitionInput): Tra
           workflowControlledAssignment: true,
         };
       }
+
+      if (
+        requestedStatus === undefined &&
+        requestedAssigneePatchProvided &&
+        principalsEqual(explicitAssignee, existingState?.returnAssignee ?? null)
+      ) {
+        if (!input.commentBody?.trim()) {
+          throw unprocessable("Requesting changes requires a comment");
+        }
+        if (!existingState?.returnAssignee) {
+          throw unprocessable("This execution stage has no return assignee");
+        }
+        patch.status = "in_progress";
+        Object.assign(patch, patchForPrincipal(existingState.returnAssignee));
+        patch.executionState = buildChangesRequestedState(existingState, activeStage);
+        return {
+          patch,
+          decision: {
+            stageId: activeStage.id,
+            stageType: activeStage.type,
+            outcome: "changes_requested",
+            body: input.commentBody.trim(),
+          },
+          workflowControlledAssignment: true,
+        };
+      }
     }
 
     const attemptedStageAdvance =
