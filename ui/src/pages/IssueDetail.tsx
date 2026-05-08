@@ -1404,6 +1404,8 @@ export function IssueDetail() {
     () => mergeIssueComments(comments ?? [], optimisticComments),
     [comments, optimisticComments],
   );
+  const statusPickerDisabledForExecutionStage =
+    issue?.status === "in_review" && issue.executionState?.status === "pending";
   const breadcrumbTitle = issue?.title ?? issueId ?? "Issue";
 
   const invalidateIssueDetail = useCallback(() => {
@@ -2906,7 +2908,7 @@ export function IssueDetail() {
           <StatusIcon
             status={issue.status}
             blockerAttention={issue.blockerAttention}
-            onChange={(status) => updateIssue.mutate({ status })}
+            onChange={statusPickerDisabledForExecutionStage ? undefined : (status) => updateIssue.mutate({ status })}
           />
           <PriorityIcon
             priority={issue.priority}
