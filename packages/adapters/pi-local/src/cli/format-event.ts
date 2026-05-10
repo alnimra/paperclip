@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import { truncateToolResultText } from "@paperclipai/adapter-utils";
 
 function safeJsonParse(text: string): unknown {
   try {
@@ -98,7 +99,7 @@ export function printPiStreamEvent(raw: string, _debug: boolean): void {
     const isError = parsed.isError === true;
     const output = typeof result === "string" ? result : JSON.stringify(result);
     if (output) {
-      console.log((isError ? pc.red : pc.gray)(output));
+      console.log((isError ? pc.red : pc.gray)(truncateToolResultText(output)));
     }
     return;
   }

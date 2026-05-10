@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import { truncateToolResultText } from "@paperclipai/adapter-utils";
 
 function asErrorText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -34,7 +35,7 @@ function printToolResult(block: Record<string, unknown>): void {
 
   console.log((isError ? pc.red : pc.cyan)(`tool_result${isError ? " (error)" : ""}`));
   if (text) {
-    console.log((isError ? pc.red : pc.gray)(text));
+    console.log((isError ? pc.red : pc.gray)(truncateToolResultText(text)));
   }
 }
 
