@@ -810,7 +810,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     return { companyId, agentId, runId, wakeupRequestId, issueId };
   }
 
-  it("keeps a local run active when the recorded pid is still alive", async () => {
+  it("terminates detached local adapter processes and queues one retry when the recorded pid is still alive", async () => {
     const child = spawnAliveProcess();
     childProcesses.add(child);
     expect(child.pid).toBeTypeOf("number");
@@ -822,19 +822,27 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const heartbeat = heartbeatService(db);
 
     const result = await heartbeat.reapOrphanedRuns();
-    expect(result.reaped).toBe(0);
+    expect(result.reaped).toBe(1);
+    expect(result.runIds).toEqual([runId]);
 
     const run = await heartbeat.getRun(runId);
-    expect(run?.status).toBe("running");
+    expect(run?.status).toBe("failed");
     expect(run?.errorCode).toBe("process_detached");
     expect(run?.error).toContain(String(child.pid));
+
+    const retryRuns = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.retryOfRunId, runId));
+    expect(retryRuns).toHaveLength(1);
+    expect(retryRuns[0]?.status).toBe("queued");
 
     const wakeup = await db
       .select()
       .from(agentWakeupRequests)
       .where(eq(agentWakeupRequests.id, wakeupRequestId))
       .then((rows) => rows[0] ?? null);
-    expect(wakeup?.status).toBe("claimed");
+    expect(wakeup?.status).toBe("failed");
   });
 
   it("queues exactly one retry when the recorded local pid is dead", async () => {
@@ -902,7 +910,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
 
     const failedRun = runs.find((row) => row.id === runId);
     expect(failedRun?.status).toBe("failed");
-    expect(failedRun?.errorCode).toBe("process_lost");
+    expect(failedRun?.errorCode).toBe("process_detached");
     expect(failedRun?.error).toContain("descendant process group");
 
     const retryRun = runs.find((row) => row.id !== runId);
@@ -1167,6 +1175,42 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
 
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
     expect(comments).toHaveLength(0);
+  });
+
+  it("fails a run when the run log exceeds PAPERCLIP_MAX_RUN_LOG_BYTES", async () => {
+    const previousMax = process.env.PAPERCLIP_MAX_RUN_LOG_BYTES;
+    process.env.PAPERCLIP_MAX_RUN_LOG_BYTES = "1024";
+
+    try {
+      mockAdapterExecute.mockImplementationOnce(async (ctx: any) => {
+        await ctx.onLog("stdout", "a".repeat(2_000));
+        return {
+          exitCode: 1,
+          signal: null,
+          timedOut: false,
+          errorCode: null,
+          errorMessage: null,
+          provider: "test",
+          model: "test-model",
+        };
+      });
+
+      const { runId } = await seedQueuedIssueRunFixture();
+      const heartbeat = heartbeatService(db);
+
+      await heartbeat.resumeQueuedRuns();
+      await waitForRunToSettle(heartbeat, runId, 5_000);
+
+      const run = await heartbeat.getRun(runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.errorCode).toBe("run_log_limit_exceeded");
+    } finally {
+      if (previousMax === undefined) {
+        delete process.env.PAPERCLIP_MAX_RUN_LOG_BYTES;
+      } else {
+        process.env.PAPERCLIP_MAX_RUN_LOG_BYTES = previousMax;
+      }
+    }
   });
 
   it("clears the detached warning when the run reports activity again", async () => {

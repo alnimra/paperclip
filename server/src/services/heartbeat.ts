@@ -130,6 +130,14 @@ import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
+const MAX_RUN_LOG_BYTES_PER_RUN_DEFAULT = 50 * 1024 * 1024;
+function resolveMaxRunLogBytesPerRun() {
+  const raw = process.env.PAPERCLIP_MAX_RUN_LOG_BYTES;
+  if (raw === undefined) return MAX_RUN_LOG_BYTES_PER_RUN_DEFAULT;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
 const MAX_RUN_EVENT_PAYLOAD_STRING_CHARS = 16 * 1024;
 const MAX_RUN_EVENT_PAYLOAD_ARRAY_ITEMS = 50;
 const MAX_RUN_EVENT_PAYLOAD_OBJECT_KEYS = 100;
@@ -4413,50 +4421,38 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
       const processPidAlive = tracksLocalChild && run.processPid && isProcessAlive(run.processPid);
       const processGroupAlive = tracksLocalChild && run.processGroupId && isProcessGroupAlive(run.processGroupId);
-      if (processPidAlive) {
-        if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
-          const detachedMessage = `Lost in-memory process handle, but child pid ${run.processPid} is still alive`;
-          const detachedRun = await setRunStatus(run.id, "running", {
-            error: detachedMessage,
-            errorCode: DETACHED_PROCESS_ERROR_CODE,
-          });
-          if (detachedRun) {
-            await appendRunEvent(detachedRun, await nextRunEventSeq(detachedRun.id), {
-              eventType: "lifecycle",
-              stream: "system",
-              level: "warn",
-              message: detachedMessage,
-              payload: {
-                processPid: run.processPid,
-              },
-            });
-          }
-        }
-        continue;
-      }
 
       let descendantOnlyCleanup = false;
-      if (processGroupAlive) {
-        descendantOnlyCleanup = true;
+      if (processPidAlive || processGroupAlive) {
+        descendantOnlyCleanup = processGroupAlive && !processPidAlive;
         await terminateHeartbeatRunProcess({
           pid: run.processPid,
           processGroupId: run.processGroupId,
+          graceMs: 5_000,
         });
       }
 
       const shouldRetry = tracksLocalChild && (!!run.processPid || !!run.processGroupId) && (run.processLossRetryCount ?? 0) < 1;
-      const baseMessage = buildProcessLossMessage(run, descendantOnlyCleanup ? { descendantOnly: true } : undefined);
+      const detachedTarget =
+        processPidAlive
+          ? `child pid ${run.processPid}`
+          : processGroupAlive
+            ? `descendant process group ${run.processGroupId ?? "unknown"}`
+            : null;
+      const baseMessage = detachedTarget
+        ? `Lost in-memory process handle, terminated detached ${detachedTarget}`
+        : buildProcessLossMessage(run, descendantOnlyCleanup ? { descendantOnly: true } : undefined);
 
       let finalizedRun = await setRunStatus(run.id, "failed", {
         error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
-        errorCode: "process_lost",
+        errorCode: processPidAlive || processGroupAlive ? DETACHED_PROCESS_ERROR_CODE : "process_lost",
         finishedAt: now,
         resultJson: mergeRunStopMetadataForAgent(
           { adapterType, adapterConfig },
           "failed",
           {
             resultJson: parseObject(run.resultJson),
-            errorCode: "process_lost",
+            errorCode: processPidAlive || processGroupAlive ? DETACHED_PROCESS_ERROR_CODE : "process_lost",
             errorMessage: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
           },
         ),
@@ -5317,6 +5313,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       } | null;
     } = { pending: null };
     let persistedLogBytes = Number(run.logBytes ?? 0);
+    const maxRunLogBytesPerRun = resolveMaxRunLogBytesPerRun();
+    let runLogLimitExceeded: { limit: number; bytes: number } | null = null;
     const flushOutputProgress = async (opts?: { force?: boolean }) => {
       const pendingOutputProgress = outputProgressState.pending;
       if (!pendingOutputProgress) return;
@@ -5412,6 +5410,42 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             ts,
           });
           persistedLogBytes += appendedBytes;
+        }
+
+        if (
+          runLogLimitExceeded === null &&
+          maxRunLogBytesPerRun !== null &&
+          persistedLogBytes > maxRunLogBytesPerRun
+        ) {
+          runLogLimitExceeded = { limit: maxRunLogBytesPerRun, bytes: persistedLogBytes };
+          const marker = compactRunLogChunk(
+            `[paperclip] Run log exceeded ${maxRunLogBytesPerRun} bytes; terminating adapter process to protect host memory.\n`,
+          );
+          if (handle) {
+            try {
+              persistedLogBytes += await runLogStore.append(handle, {
+                stream: "system",
+                chunk: marker,
+                ts,
+              });
+            } catch (err) {
+              logger.warn({ err, runId }, "failed to append run log limit marker");
+            }
+          }
+
+          const running = runningProcesses.get(runId);
+          if (running) {
+            await terminateHeartbeatRunProcess({
+              pid: running.child.pid ?? run.processPid,
+              processGroupId: running.processGroupId ?? run.processGroupId,
+              graceMs: Math.max(1, running.graceSec) * 1000,
+            });
+          } else if (run.processPid || run.processGroupId) {
+            await terminateHeartbeatRunProcess({
+              pid: run.processPid,
+              processGroupId: run.processGroupId,
+            });
+          }
         }
         outputSeq += 1;
         outputProgressState.pending = {
@@ -5628,13 +5662,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       } else {
         outcome = "failed";
       }
+
+      const logLimitFailure = runLogLimitExceeded;
+      const forcedLogLimitErrorMessage = logLimitFailure
+        ? `Run log exceeded ${logLimitFailure.limit} bytes (recorded ${logLimitFailure.bytes} bytes); terminated adapter process to protect host memory.`
+        : null;
+      if (forcedLogLimitErrorMessage && !isHeartbeatRunTerminalStatus(latestRun?.status)) {
+        outcome = "failed";
+      }
+
       const runErrorMessage =
         outcome === "cancelled"
           ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
           : outcome === "succeeded"
             ? null
             : redactCurrentUserText(
-                adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
+                forcedLogLimitErrorMessage ??
+                  adapterResult.errorMessage ??
+                  (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
                 currentUserRedactionOptions,
               );
       const runErrorCode =
@@ -5643,7 +5688,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           : outcome === "cancelled"
             ? (latestRun?.errorCode ?? "cancelled")
             : outcome === "failed"
-              ? (adapterResult.errorCode ?? "adapter_failed")
+              ? (forcedLogLimitErrorMessage ? "run_log_limit_exceeded" : (adapterResult.errorCode ?? "adapter_failed"))
               : null;
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
