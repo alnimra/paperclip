@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import { truncateToolResultText } from "@paperclipai/adapter-utils";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -87,7 +88,7 @@ function printTextMessage(prefix: string, colorize: (text: string) => string, me
         asString(part.result) ||
         stringifyUnknown(part.output ?? part.result ?? part.text ?? part.response);
       console.log((isError ? pc.red : pc.cyan)(`tool_result${isError ? " (error)" : ""}`));
-      if (contentText) console.log((isError ? pc.red : pc.gray)(contentText));
+      if (contentText) console.log((isError ? pc.red : pc.gray)(truncateToolResultText(contentText)));
     }
   }
 }
@@ -196,7 +197,7 @@ export function printGeminiStreamEvent(raw: string, _debug: boolean): void {
         payload.error !== undefined ||
         asString(payload.status).toLowerCase() === "error";
       console.log((isError ? pc.red : pc.cyan)(`tool_result${isError ? " (error)" : ""}`));
-      console.log((isError ? pc.red : pc.gray)(stringifyUnknown(payload.result ?? payload.output ?? payload.error)));
+      console.log((isError ? pc.red : pc.gray)(truncateToolResultText(stringifyUnknown(payload.result ?? payload.output ?? payload.error))));
       return;
     }
     console.log(pc.yellow(`tool_call: ${toolName}${subtype ? ` (${subtype})` : ""}`));
