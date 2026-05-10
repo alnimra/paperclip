@@ -1,5 +1,6 @@
 import pc from "picocolors";
 import { normalizeCursorStreamLine } from "../shared/stream.js";
+import { truncateToolResultText } from "@paperclipai/adapter-utils";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -101,7 +102,7 @@ function printAssistantMessage(messageRaw: unknown): void {
         asString(part.result) ||
         stringifyUnknown(part.output ?? part.result ?? part.text ?? part);
       console.log((isError ? pc.red : pc.cyan)(`tool_result${isError ? " (error)" : ""}`));
-      if (contentText) console.log((isError ? pc.red : pc.gray)(contentText));
+      if (contentText) console.log((isError ? pc.red : pc.gray)(truncateToolResultText(contentText)));
     }
   }
 }
@@ -148,7 +149,7 @@ function printToolCallEventTopLevel(parsed: Record<string, unknown>): void {
     const header = `tool_result${isError ? " (error)" : ""}${callId ? ` (${callId})` : ""}`;
     console.log((isError ? pc.red : pc.cyan)(header));
     if (result !== undefined) {
-      console.log((isError ? pc.red : pc.gray)(stringifyUnknown(result)));
+      console.log((isError ? pc.red : pc.gray)(truncateToolResultText(stringifyUnknown(result))));
     }
     return;
   }
@@ -190,7 +191,7 @@ function printLegacyToolEvent(part: Record<string, unknown>): void {
       .join(" ");
     console.log((isError ? pc.red : pc.cyan)(summary));
     if (output) {
-      console.log((isError ? pc.red : pc.gray)(output));
+      console.log((isError ? pc.red : pc.gray)(truncateToolResultText(output)));
     }
   }
 }

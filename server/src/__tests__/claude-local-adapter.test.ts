@@ -184,4 +184,45 @@ describe("claude_local cli formatter", () => {
       spy.mockRestore();
     }
   });
+
+  it("truncates tool_result output when PAPERCLIP_CLI_MAX_TOOL_RESULT_CHARS is set", async () => {
+    const previous = process.env.PAPERCLIP_CLI_MAX_TOOL_RESULT_CHARS;
+    process.env.PAPERCLIP_CLI_MAX_TOOL_RESULT_CHARS = "10";
+
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      vi.resetModules();
+      const { printClaudeStreamEvent: print } = await import("@paperclipai/adapter-claude-local/cli");
+      print(
+        JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "tool_1",
+                content: "0123456789ABCDEFGHIJ",
+                is_error: false,
+              },
+            ],
+          },
+        }),
+        false,
+      );
+
+      const lines = spy.mock.calls
+        .map((call) => call.map((value) => String(value)).join(" "))
+        .map(stripAnsi)
+        .join("\n");
+
+      expect(lines).toContain("0123456789");
+      expect(lines).toContain("truncated");
+    } finally {
+      spy.mockRestore();
+      if (previous === undefined) delete process.env.PAPERCLIP_CLI_MAX_TOOL_RESULT_CHARS;
+      else process.env.PAPERCLIP_CLI_MAX_TOOL_RESULT_CHARS = previous;
+      vi.resetModules();
+    }
+  });
 });

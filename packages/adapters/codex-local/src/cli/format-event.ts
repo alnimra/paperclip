@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import { truncateToolResultText } from "@paperclipai/adapter-utils";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -132,7 +133,7 @@ function printItemCompleted(item: Record<string, unknown>): boolean {
     const isError = item.is_error === true || asString(item.status) === "error";
     const text = asString(item.content) || asString(item.result) || asString(item.output);
     console.log((isError ? pc.red : pc.cyan)(`tool_result${isError ? " (error)" : ""}`));
-    if (text) console.log((isError ? pc.red : pc.gray)(text));
+    if (text) console.log((isError ? pc.red : pc.gray)(truncateToolResultText(text)));
     return true;
   }
 
