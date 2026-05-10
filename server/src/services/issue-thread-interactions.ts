@@ -34,7 +34,7 @@ import {
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
-import { issueService } from "./issues.js";
+import { appendAcceptanceCriteriaToDescription, extractAcceptanceCriteriaSection, issueService } from "./issues.js";
 
 type InteractionActor = {
   agentId?: string | null;
@@ -63,6 +63,7 @@ type IssueTouchDb = Pick<Db, "update">;
 type IssueResolutionContext = {
   id: string;
   companyId: string;
+  description: string | null;
   status: string;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
@@ -506,6 +507,7 @@ export function issueThreadInteractionService(db: Db) {
         .select({
           id: issues.id,
           companyId: issues.companyId,
+          description: issues.description,
           status: issues.status,
           assigneeAgentId: issues.assigneeAgentId,
           assigneeUserId: issues.assigneeUserId,
@@ -525,13 +527,30 @@ export function issueThreadInteractionService(db: Db) {
         actor: args.actor,
       })) {
         const returnStatus = issueContext.status === "blocked" ? "blocked" : "todo";
-        const returnedIssue = await issueService(db).update(args.issue.id, {
-          status: returnStatus,
-          assigneeAgentId: args.current.createdByAgentId,
-          assigneeUserId: null,
-          actorAgentId: args.actor.agentId ?? null,
-          actorUserId: args.actor.userId ?? null,
-        }, tx);
+        const shouldEnsureAcceptanceCriteria = returnStatus === "todo";
+        const nextDescription =
+          shouldEnsureAcceptanceCriteria && !extractAcceptanceCriteriaSection(issueContext.description)
+            ? appendAcceptanceCriteriaToDescription(issueContext.description, [
+                "Continue the approved work described in this issue through to completion.",
+                "Record verification evidence in the issue thread.",
+              ])
+            : issueContext.description;
+        const descriptionPatch =
+          shouldEnsureAcceptanceCriteria && nextDescription !== issueContext.description
+            ? { description: nextDescription }
+            : {};
+        const returnedIssue = await issueService(db).update(
+          args.issue.id,
+          {
+            status: returnStatus,
+            assigneeAgentId: args.current.createdByAgentId,
+            assigneeUserId: null,
+            ...descriptionPatch,
+            actorAgentId: args.actor.agentId ?? null,
+            actorUserId: args.actor.userId ?? null,
+          },
+          tx,
+        );
 
         if (returnedIssue) {
           continuationIssue = {
@@ -833,21 +852,35 @@ export function issueThreadInteractionService(db: Db) {
             throw unprocessable(`Unable to resolve parent for suggested task ${task.clientKey}`);
           }
 
-          const { issue: createdIssue } = await issueService(tx as unknown as Db).createChild(parentIssueId, {
-            title: task.title,
-            description: task.description ?? null,
-            status: "todo",
-            priority: task.priority ?? "medium",
-            assigneeAgentId: task.assigneeAgentId ?? null,
-            assigneeUserId: task.assigneeUserId ?? null,
-            projectId: task.projectId ?? issue.projectId,
-            goalId: task.goalId ?? issue.goalId,
-            billingCode: task.billingCode ?? null,
-            createdByAgentId: actor.agentId ?? null,
-            createdByUserId: actor.userId ?? null,
-            actorAgentId: actor.agentId ?? null,
-            actorUserId: actor.userId ?? null,
-          } as Parameters<ReturnType<typeof issueService>["createChild"]>[1]);
+          const assigneeAgentId = task.assigneeAgentId ?? null;
+          const shouldInjectAcceptanceCriteria =
+            Boolean(assigneeAgentId) && !extractAcceptanceCriteriaSection(task.description ?? null);
+          const acceptanceCriteria = shouldInjectAcceptanceCriteria
+            ? [
+                task.description ? "Meets the requirements in the description." : `Completes: ${task.title}`,
+                "Adds a brief verification note in the issue thread.",
+              ]
+            : undefined;
+
+          const { issue: createdIssue } = await issueService(tx as unknown as Db).createChild(
+            parentIssueId,
+            {
+              title: task.title,
+              description: task.description ?? null,
+              acceptanceCriteria,
+              status: "todo",
+              priority: task.priority ?? "medium",
+              assigneeAgentId,
+              assigneeUserId: task.assigneeUserId ?? null,
+              projectId: task.projectId ?? issue.projectId,
+              goalId: task.goalId ?? issue.goalId,
+              billingCode: task.billingCode ?? null,
+              createdByAgentId: actor.agentId ?? null,
+              createdByUserId: actor.userId ?? null,
+              actorAgentId: actor.agentId ?? null,
+              actorUserId: actor.userId ?? null,
+            } as Parameters<ReturnType<typeof issueService>["createChild"]>[1],
+          );
 
           const parentIdentifier = createdByClientKey.get(task.parentClientKey ?? "")?.identifier
             ?? parentById.get(parentIssueId)?.identifier

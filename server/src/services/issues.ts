@@ -227,12 +227,35 @@ function decodeDatabaseTextPreview(value: string | null | undefined, maxChars: n
   return truncateByCodePoint(Buffer.from(value, "base64").toString("utf8"), maxChars);
 }
 
-function appendAcceptanceCriteriaToDescription(description: string | null | undefined, acceptanceCriteria: string[] | undefined) {
+export function appendAcceptanceCriteriaToDescription(description: string | null | undefined, acceptanceCriteria: string[] | undefined) {
   const criteria = (acceptanceCriteria ?? []).map((item) => item.trim()).filter(Boolean);
   if (criteria.length === 0) return description ?? null;
   const base = description?.trim() ?? "";
   const criteriaMarkdown = ["## Acceptance Criteria", "", ...criteria.map((item) => `- ${item}`)].join("\n");
   return base ? `${base}\n\n${criteriaMarkdown}` : criteriaMarkdown;
+}
+
+export function extractAcceptanceCriteriaSection(markdown: string | null | undefined): string | null {
+  if (!markdown) return null;
+  const re = /^##\s+Acceptance Criteria\s*$([\s\S]*?)(?=^##\s+|(?![\s\S]))/im;
+  const match = re.exec(markdown);
+  const section = match?.[1]?.trim();
+  return section ? section : null;
+}
+
+function requiresAcceptanceCriteriaForAgentIssue(status: string | null | undefined): boolean {
+  if (!status) return false;
+  // Only enforce the template once the issue is truly "actionable for execution".
+  // Keeping the guardrail narrow prevents legacy/spec-less issues from becoming un-editable.
+  return status === "todo" || status === "in_progress";
+}
+
+function normalizeStatusForUnresolvedBlockers(status: string, unresolvedBlockerIssueIds: string[]): string {
+  if (unresolvedBlockerIssueIds.length === 0) return status;
+  // `backlog` is non-actionable; keep it as-is so users can record future dependencies without
+  // forcing a "blocked" lane prematurely.
+  if (status === "backlog" || status === "done" || status === "cancelled") return status;
+  return "blocked";
 }
 
 function createIssueDependencyReadiness(issueId: string): IssueDependencyReadiness {
@@ -2604,6 +2627,17 @@ export function issueService(db: Db) {
         actorUserId,
         ...issueData
       } = data;
+      const descriptionWithAcceptanceCriteria = appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria);
+      const childOriginKind = issueData.originKind ?? "manual";
+      const childIsManualOrigin = childOriginKind === "manual";
+      if (
+        issueData.assigneeAgentId
+        && childIsManualOrigin
+        && requiresAcceptanceCriteriaForAgentIssue(issueData.status)
+        && !extractAcceptanceCriteriaSection(descriptionWithAcceptanceCriteria)
+      ) {
+        throw unprocessable("Agent-executed issues require an Acceptance Criteria section");
+      }
       const child = await issueService(db).create(parent.companyId, {
         ...issueData,
         parentId: parent.id,
@@ -2612,7 +2646,7 @@ export function issueService(db: Db) {
         requestDepth: clampIssueRequestDepth(
           Math.max(clampIssueRequestDepth(parent.requestDepth) + 1, issueData.requestDepth ?? 0),
         ),
-        description: appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria),
+        description: descriptionWithAcceptanceCriteria,
         inheritExecutionWorkspaceFromIssueId: parent.id,
       });
 
@@ -2621,12 +2655,12 @@ export function issueService(db: Db) {
           .select({ blockerIssueId: issueRelations.issueId })
           .from(issueRelations)
           .where(and(eq(issueRelations.companyId, parent.companyId), eq(issueRelations.relatedIssueId, parent.id), eq(issueRelations.type, "blocks")));
-        await syncBlockedByIssueIds(
-          parent.id,
-          parent.companyId,
-          [...new Set([...existingBlockers.map((row) => row.blockerIssueId), child.id])],
-          { agentId: actorAgentId ?? null, userId: actorUserId ?? null },
-        );
+        const blockedByIssueIds = [...new Set([...existingBlockers.map((row) => row.blockerIssueId), child.id])];
+        await issueService(db).update(parent.id, {
+          blockedByIssueIds,
+          actorAgentId: actorAgentId ?? null,
+          actorUserId: actorUserId ?? null,
+        });
       }
 
       return {
@@ -2645,6 +2679,19 @@ export function issueService(db: Db) {
         inheritExecutionWorkspaceFromIssueId,
         ...issueData
       } = data;
+      const requestedStatus = issueData.status ?? "backlog";
+      const originKind = issueData.originKind ?? "manual";
+      const isManualOrigin = originKind === "manual";
+      const hasInteractiveCreator =
+        (typeof issueData.createdByAgentId === "string" && issueData.createdByAgentId.length > 0) ||
+        (typeof issueData.createdByUserId === "string" && issueData.createdByUserId.length > 0);
+      const unresolvedBlockerIssueIds = blockedByIssueIds
+        ? await listUnresolvedBlockerIssueIds(db, companyId, blockedByIssueIds)
+        : [];
+      if (requestedStatus === "in_progress" && unresolvedBlockerIssueIds.length > 0) {
+        throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+      }
+      const normalizedStatus = normalizeStatusForUnresolvedBlockers(requestedStatus, unresolvedBlockerIssueIds);
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
       if (!isolatedWorkspacesEnabled) {
         delete issueData.executionWorkspaceId;
@@ -2660,8 +2707,17 @@ export function issueService(db: Db) {
       if (data.assigneeUserId) {
         await assertAssignableUser(companyId, data.assigneeUserId);
       }
-      if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
+      if (normalizedStatus === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
+      }
+      if (
+        data.assigneeAgentId
+        && isManualOrigin
+        && hasInteractiveCreator
+        && requiresAcceptanceCriteriaForAgentIssue(normalizedStatus)
+        && !extractAcceptanceCriteriaSection(issueData.description)
+      ) {
+        throw unprocessable("Agent-executed issues require an Acceptance Criteria section");
       }
       return db.transaction(async (tx) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
@@ -2768,8 +2824,9 @@ export function issueService(db: Db) {
 
         const values = {
           ...issueData,
+          status: normalizedStatus,
           requestDepth: clampIssueRequestDepth(issueData.requestDepth),
-          originKind: issueData.originKind ?? "manual",
+          originKind,
           goalId: resolveIssueGoalId({
             projectId: issueData.projectId,
             goalId: issueData.goalId,
@@ -2831,6 +2888,7 @@ export function issueService(db: Db) {
         .where(eq(issues.id, id))
         .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
       if (!existing) return null;
+      const isManualOrigin = existing.originKind === "manual";
 
       const {
         labelIds: nextLabelIds,
@@ -2839,6 +2897,9 @@ export function issueService(db: Db) {
         actorUserId,
         ...issueData
       } = data;
+      const hasInteractiveActor =
+        (typeof actorAgentId === "string" && actorAgentId.length > 0) ||
+        (typeof actorUserId === "string" && actorUserId.length > 0);
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
       if (!isolatedWorkspacesEnabled) {
         delete issueData.executionWorkspaceId;
@@ -2846,14 +2907,31 @@ export function issueService(db: Db) {
         delete issueData.executionWorkspaceSettings;
       }
 
-      if (issueData.status) {
-        assertTransition(existing.status, issueData.status);
+      const nextStatusCandidate = issueData.status !== undefined ? issueData.status : existing.status;
+      const unresolvedBlockerIssueIds = blockedByIssueIds !== undefined
+        ? await listUnresolvedBlockerIssueIds(dbOrTx, existing.companyId, blockedByIssueIds)
+        : (
+            await listIssueDependencyReadinessMap(dbOrTx, existing.companyId, [id])
+          ).get(id)?.unresolvedBlockerIssueIds ?? [];
+      if (issueData.status === "in_progress" && unresolvedBlockerIssueIds.length > 0) {
+        throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+      }
+      const normalizedStatus = normalizeStatusForUnresolvedBlockers(nextStatusCandidate, unresolvedBlockerIssueIds);
+      const normalizedStatusChanged =
+        (issueData.status !== undefined && normalizedStatus !== issueData.status) ||
+        (issueData.status === undefined && normalizedStatus !== existing.status);
+
+      if (issueData.status || normalizedStatusChanged) {
+        assertTransition(existing.status, normalizedStatus);
       }
 
       const patch: Partial<typeof issues.$inferInsert> = {
         ...issueData,
         updatedAt: new Date(),
       };
+      if (issueData.status !== undefined || normalizedStatusChanged) {
+        patch.status = normalizedStatus;
+      }
       if (issueData.requestDepth !== undefined) {
         patch.requestDepth = clampIssueRequestDepth(issueData.requestDepth);
       }
@@ -2862,9 +2940,26 @@ export function issueService(db: Db) {
         issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
       const nextAssigneeUserId =
         issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
+      const nextDescription =
+        issueData.description !== undefined ? issueData.description : existing.description;
+      const effectiveStatus = patch.status ?? existing.status;
 
       if (nextAssigneeAgentId && nextAssigneeUserId) {
         throw unprocessable("Issue can only have one assignee");
+      }
+      const acceptanceCriteriaRelevantUpdate =
+        issueData.assigneeAgentId !== undefined ||
+        issueData.status !== undefined ||
+        issueData.description !== undefined;
+      if (
+        acceptanceCriteriaRelevantUpdate &&
+        hasInteractiveActor &&
+        isManualOrigin &&
+        nextAssigneeAgentId
+        && requiresAcceptanceCriteriaForAgentIssue(effectiveStatus)
+        && !extractAcceptanceCriteriaSection(nextDescription)
+      ) {
+        throw unprocessable("Agent-executed issues require an Acceptance Criteria section");
       }
       if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
@@ -2897,14 +2992,14 @@ export function issueService(db: Db) {
         await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
       }
 
-      applyStatusSideEffects(issueData.status, patch);
-      if (issueData.status && issueData.status !== "done") {
+      applyStatusSideEffects(patch.status, patch);
+      if (patch.status && patch.status !== "done") {
         patch.completedAt = null;
       }
-      if (issueData.status && issueData.status !== "cancelled") {
+      if (patch.status && patch.status !== "cancelled") {
         patch.cancelledAt = null;
       }
-      if (issueData.status && issueData.status !== "in_progress") {
+      if (patch.status && patch.status !== "in_progress") {
         patch.checkoutRunId = null;
         // Fix B: also clear the execution lock when leaving in_progress
         patch.executionRunId = null;

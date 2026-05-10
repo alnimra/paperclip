@@ -264,4 +264,164 @@ describe("issue dependency wakeups in issue routes", () => {
       );
     });
   });
+
+  it("wakes the parent when a child transitions to blocked", async () => {
+    mockIssueService.getById
+      .mockResolvedValueOnce({
+        id: "child-1",
+        companyId: "company-1",
+        identifier: "PAP-201",
+        title: "Child issue",
+        description: null,
+        status: "in_progress",
+        priority: "medium",
+        parentId: "parent-1",
+        assigneeAgentId: "agent-child",
+        assigneeUserId: null,
+        createdByAgentId: "agent-delegator",
+        createdByUserId: null,
+        executionWorkspaceId: null,
+        labels: [],
+        labelIds: [],
+      })
+      .mockResolvedValueOnce({
+        id: "parent-1",
+        companyId: "company-1",
+        identifier: "PAP-200",
+        title: "Parent issue",
+        description: null,
+        status: "in_progress",
+        priority: "high",
+        parentId: null,
+        assigneeAgentId: "agent-parent",
+        assigneeUserId: null,
+        createdByAgentId: null,
+        createdByUserId: null,
+        executionWorkspaceId: null,
+        labels: [],
+        labelIds: [],
+      });
+
+    mockIssueService.update.mockResolvedValue({
+      id: "child-1",
+      companyId: "company-1",
+      identifier: "PAP-201",
+      title: "Child issue",
+      description: null,
+      status: "blocked",
+      priority: "medium",
+      parentId: "parent-1",
+      assigneeAgentId: "agent-child",
+      assigneeUserId: null,
+      createdByAgentId: "agent-delegator",
+      createdByUserId: null,
+      executionWorkspaceId: null,
+      labels: [],
+      labelIds: [],
+    });
+
+    const res = await request(await createApp()).patch("/api/issues/child-1").send({ status: "blocked" });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(mockWakeup).toHaveBeenCalledWith(
+        "agent-parent",
+        expect.objectContaining({
+          reason: "issue_child_blocked",
+          payload: expect.objectContaining({
+            issueId: "parent-1",
+            blockedChildIssueId: "child-1",
+            blockedChildIssueIdentifier: "PAP-201",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("wakes the delegator and parent assignee when a child transitions to in_review", async () => {
+    mockIssueService.getById
+      .mockResolvedValueOnce({
+        id: "child-2",
+        companyId: "company-1",
+        identifier: "PAP-203",
+        title: "Reviewable child",
+        description: null,
+        status: "in_progress",
+        priority: "medium",
+        parentId: "parent-2",
+        assigneeAgentId: "agent-worker",
+        assigneeUserId: null,
+        createdByAgentId: "agent-delegator",
+        createdByUserId: null,
+        executionWorkspaceId: null,
+        labels: [],
+        labelIds: [],
+      })
+      .mockResolvedValueOnce({
+        id: "parent-2",
+        companyId: "company-1",
+        identifier: "PAP-202",
+        title: "Parent issue",
+        description: null,
+        status: "in_progress",
+        priority: "high",
+        parentId: null,
+        assigneeAgentId: "agent-parent",
+        assigneeUserId: null,
+        createdByAgentId: null,
+        createdByUserId: null,
+        executionWorkspaceId: null,
+        labels: [],
+        labelIds: [],
+      });
+
+    mockIssueService.update.mockResolvedValue({
+      id: "child-2",
+      companyId: "company-1",
+      identifier: "PAP-203",
+      title: "Reviewable child",
+      description: null,
+      status: "in_review",
+      priority: "medium",
+      parentId: "parent-2",
+      assigneeAgentId: "agent-worker",
+      assigneeUserId: null,
+      createdByAgentId: "agent-delegator",
+      createdByUserId: null,
+      executionWorkspaceId: null,
+      labels: [],
+      labelIds: [],
+    });
+
+    const res = await request(await createApp()).patch("/api/issues/child-2").send({ status: "in_review" });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(mockWakeup).toHaveBeenCalledWith(
+        "agent-delegator",
+        expect.objectContaining({
+          reason: "execution_review_requested",
+          payload: expect.objectContaining({
+            issueId: "child-2",
+            fromStatus: "in_progress",
+            toStatus: "in_review",
+          }),
+        }),
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(mockWakeup).toHaveBeenCalledWith(
+        "agent-parent",
+        expect.objectContaining({
+          reason: "execution_review_requested",
+          payload: expect.objectContaining({
+            issueId: "parent-2",
+            reviewChildIssueId: "child-2",
+            reviewChildIssueIdentifier: "PAP-203",
+          }),
+        }),
+      );
+    });
+  });
 });

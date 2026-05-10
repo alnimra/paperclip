@@ -30,6 +30,7 @@ type StartupBannerOptions = {
   migrationSummary: string;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
+  heartbeatTimerWakeupsEnabled: boolean;
   databaseBackupEnabled: boolean;
   databaseBackupIntervalMinutes: number;
   databaseBackupRetentionDays: number;
@@ -128,8 +129,11 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
       : redactConnectionString(opts.db.connectionString);
 
   const heartbeat = opts.heartbeatSchedulerEnabled
-    ? `enabled ${color(`(${opts.heartbeatSchedulerIntervalMs}ms)`, "dim")}`
-    : color("disabled", "yellow");
+    ? `scheduler enabled ${color(`(${opts.heartbeatSchedulerIntervalMs}ms)`, "dim")}`
+    : color("scheduler disabled", "yellow");
+  const heartbeatTimers = opts.heartbeatTimerWakeupsEnabled
+    ? color("timer wakeups enabled", "yellow")
+    : color("timer wakeups disabled", "green");
   const dbBackup = opts.databaseBackupEnabled
     ? `enabled ${color(`(every ${opts.databaseBackupIntervalMinutes}m, keep ${opts.databaseBackupRetentionDays}d)`, "dim")}`
     : color("disabled", "yellow");
@@ -162,7 +166,7 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
         ? color(agentJwtSecret.message, "green")
         : color(agentJwtSecret.message, "yellow"),
     ),
-    row("Heartbeat", heartbeat),
+    row("Heartbeat", `${heartbeat} | ${heartbeatTimers}`),
     row("DB Backup", dbBackup),
     row("Backup Dir", opts.databaseBackupDir),
     row("Config", configPath),

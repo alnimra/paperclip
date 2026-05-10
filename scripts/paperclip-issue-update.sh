@@ -49,6 +49,7 @@ require_command() {
 
 issue_id="${PAPERCLIP_TASK_ID:-}"
 status=""
+status_set=0
 comment_arg=""
 assignee_agent_id=""
 project_id=""
@@ -65,6 +66,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --status)
       status="${2:-}"
+      status_set=1
       shift 2
       ;;
     --comment)
@@ -147,6 +149,24 @@ elif [[ ! -t 0 ]]; then
 fi
 
 require_command jq
+
+# Best-practice guardrail: assigning work implies "ready". If the issue is still
+# backlog and the caller didn't explicitly set a status, auto-promote to todo so
+# the assignee actually receives a wakeup. (Backlog is for parked/unscheduled work.)
+if [[ "$status_set" == "0" && -n "$assignee_agent_id" && -n "${PAPERCLIP_API_URL:-}" ]]; then
+  auth_curl_args=()
+  if [[ -n "${PAPERCLIP_API_KEY:-}" ]]; then
+    auth_curl_args+=("-H" "Authorization: Bearer $PAPERCLIP_API_KEY")
+  fi
+  current_status="$(
+    curl -sf "${PAPERCLIP_API_URL}/api/issues/${issue_id}" \
+      ${auth_curl_args[@]+"${auth_curl_args[@]}"} \
+      | jq -r '.status // empty' 2>/dev/null || true
+  )"
+  if [[ "$current_status" == "backlog" ]]; then
+    status="todo"
+  fi
+fi
 
 blocked_by_issue_ids_json="$(
   if ((${#blocked_by_issue_ids[@]} > 0)); then

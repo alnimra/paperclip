@@ -45,6 +45,13 @@ This starts:
 
 Issue execution may also use project execution workspace policies and workspace runtime services for per-project worktrees, preview servers, and managed dev commands. Configure those through the project workspace/runtime surfaces rather than starting long-running unmanaged processes when a task needs a reusable service.
 
+## Heartbeats (Event-Driven by Default)
+
+Paperclip is designed to wake agents on events (issue assignment, new comments, blockers resolving, child issues completing, etc). Timer-based agent wakeups are disabled by default.
+
+- Enable timer-based wakeups (legacy): `HEARTBEAT_TIMER_WAKEUPS_ENABLED=true`
+- Disable the scheduler loop entirely (not recommended; disables routine schedules and recovery): `HEARTBEAT_SCHEDULER_ENABLED=false`
+
 ## Storybook
 
 The board UI Storybook keeps stories and Storybook config under `ui/storybook/` so component review files stay out of the app source routes.

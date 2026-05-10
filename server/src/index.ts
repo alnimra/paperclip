@@ -715,16 +715,18 @@ export async function startServer(): Promise<StartedServer> {
         logger.error({ err }, "startup heartbeat recovery failed");
       });
     setInterval(() => {
-      void heartbeat
-        .tickTimers(new Date())
-        .then((result) => {
-          if (result.enqueued > 0) {
-            logger.info({ ...result }, "heartbeat timer tick enqueued runs");
-          }
-        })
-        .catch((err) => {
-          logger.error({ err }, "heartbeat timer tick failed");
-        });
+      if (config.heartbeatTimerWakeupsEnabled) {
+        void heartbeat
+          .tickTimers(new Date())
+          .then((result) => {
+            if (result.enqueued > 0) {
+              logger.info({ ...result }, "heartbeat timer tick enqueued runs");
+            }
+          })
+          .catch((err) => {
+            logger.error({ err }, "heartbeat timer tick failed");
+          });
+      }
 
       void routines
         .tickScheduledTriggers(new Date())
@@ -841,6 +843,7 @@ export async function startServer(): Promise<StartedServer> {
         migrationSummary,
         heartbeatSchedulerEnabled: config.heartbeatSchedulerEnabled,
         heartbeatSchedulerIntervalMs: config.heartbeatSchedulerIntervalMs,
+        heartbeatTimerWakeupsEnabled: config.heartbeatTimerWakeupsEnabled,
         databaseBackupEnabled: config.databaseBackupEnabled,
         databaseBackupIntervalMinutes: config.databaseBackupIntervalMinutes,
         databaseBackupRetentionDays: config.databaseBackupRetentionDays,

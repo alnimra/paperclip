@@ -399,7 +399,17 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
       },
     );
 
-    const largeIssueDescription = `Round-trip the company package through the CLI.\n\n${"portable-data ".repeat(12_000)}`;
+    const largeIssueDescription =
+      [
+        "Round-trip the company package through the CLI.",
+        "",
+        "## Acceptance Criteria",
+        "",
+        "- Export succeeds and writes a portable bundle.",
+        "- Import succeeds into a new company.",
+        "",
+        `${"portable-data ".repeat(12_000)}`,
+      ].join("\n");
 
     const sourceIssue = await api<{ id: string; title: string; identifier: string }>(
       apiBase,

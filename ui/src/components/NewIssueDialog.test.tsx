@@ -387,7 +387,7 @@ describe("NewIssueDialog", () => {
         "value",
       )?.set;
       valueSetter?.call(titleInput, "Typed issue");
-      titleInput!.dispatchEvent(new Event("input", { bubbles: true }));
+      titleInput!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await flush();
 
@@ -397,7 +397,7 @@ describe("NewIssueDialog", () => {
         "value",
       )?.set;
       valueSetter?.call(descriptionInput, "Typed description");
-      descriptionInput!.dispatchEvent(new Event("input", { bubbles: true }));
+      descriptionInput!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await flush();
 

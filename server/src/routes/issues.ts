@@ -2657,6 +2657,96 @@ export function issueRoutes(
         }
       }
 
+      const becameBlocked = existing.status !== "blocked" && issue.status === "blocked";
+      if (becameBlocked && issue.parentId) {
+        const parent = await svc.getById(issue.parentId);
+        if (parent && parent.assigneeAgentId && !["backlog", "done", "cancelled"].includes(parent.status)) {
+          addWakeup(parent.assigneeAgentId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "issue_child_blocked",
+            payload: {
+              issueId: parent.id,
+              blockedChildIssueId: issue.id,
+              blockedChildIssueIdentifier: issue.identifier,
+              blockedChildIssueTitle: issue.title,
+              blockedChildIssueStatus: issue.status,
+            },
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
+            contextSnapshot: {
+              issueId: parent.id,
+              taskId: parent.id,
+              wakeReason: "issue_child_blocked",
+              source: "issue.child_blocked",
+              blockedChildIssueId: issue.id,
+              blockedChildIssueIdentifier: issue.identifier,
+              blockedChildIssueTitle: issue.title,
+              blockedChildIssueStatus: issue.status,
+            },
+          });
+        }
+      }
+
+      const becameInReview = existing.status !== "in_review" && issue.status === "in_review";
+      if (becameInReview) {
+        const delegatorAgentId = issue.createdByAgentId;
+        const delegatorEligible =
+          typeof delegatorAgentId === "string" &&
+          delegatorAgentId.length > 0 &&
+          delegatorAgentId !== issue.assigneeAgentId;
+
+        if (delegatorEligible) {
+          addWakeup(delegatorAgentId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "execution_review_requested",
+            payload: {
+              issueId: issue.id,
+              mutation: "status",
+              fromStatus: existing.status,
+              toStatus: issue.status,
+            },
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
+            contextSnapshot: {
+              issueId: issue.id,
+              taskId: issue.id,
+              wakeReason: "execution_review_requested",
+              source: "issue.in_review.delegator_wake",
+            },
+          });
+        }
+
+        if (issue.parentId) {
+          const parent = await svc.getById(issue.parentId);
+          if (parent && parent.assigneeAgentId && !["backlog", "done", "cancelled"].includes(parent.status)) {
+            addWakeup(parent.assigneeAgentId, {
+              source: "automation",
+              triggerDetail: "system",
+              reason: "execution_review_requested",
+              payload: {
+                issueId: parent.id,
+                reviewChildIssueId: issue.id,
+                reviewChildIssueIdentifier: issue.identifier,
+                reviewChildIssueTitle: issue.title,
+              },
+              requestedByActorType: actor.actorType,
+              requestedByActorId: actor.actorId,
+              contextSnapshot: {
+                issueId: parent.id,
+                taskId: parent.id,
+                wakeReason: "execution_review_requested",
+                source: "issue.child_in_review",
+                reviewChildIssueId: issue.id,
+                reviewChildIssueIdentifier: issue.identifier,
+                reviewChildIssueTitle: issue.title,
+              },
+            });
+          }
+        }
+      }
+
       const becameTerminal =
         !["done", "cancelled"].includes(existing.status) && ["done", "cancelled"].includes(issue.status);
       if (becameTerminal && issue.parentId) {

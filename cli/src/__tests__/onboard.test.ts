@@ -142,7 +142,16 @@ describe("onboard", () => {
     const configPath = createFreshConfigPath();
     delete process.env.PAPERCLIP_TAILNET_BIND_HOST;
 
-    await onboard({ config: configPath, yes: true, invokedByRun: true, bind: "tailnet" });
+    const prevPath = process.env.PATH;
+    // Force tailnet auto-detection to fail deterministically in test environments
+    // where `tailscale ip -4` may succeed (for example: a developer machine on a tailnet).
+    // Keep this to a minimal bin path that excludes Homebrew (/usr/local/bin).
+    process.env.PATH = "/usr/bin:/bin";
+    try {
+      await onboard({ config: configPath, yes: true, invokedByRun: true, bind: "tailnet" });
+    } finally {
+      process.env.PATH = prevPath;
+    }
 
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as PaperclipConfig;
     expect(raw.server.deploymentMode).toBe("authenticated");

@@ -1443,6 +1443,13 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     expect(child.executionWorkspaceId).toBe(executionWorkspaceId);
     expect(child.executionWorkspacePreference).toBe("reuse_existing");
 
+    const parentAfter = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, parentIssueId))
+      .then((rows) => rows[0] ?? null);
+    expect(parentAfter?.status).toBe("blocked");
+
     const parentRelations = await svc.getRelationSummaries(parentIssueId);
     expect(parentRelations.blockedBy).toEqual([
       expect.objectContaining({
@@ -1669,6 +1676,7 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
         id: blockedIssueId,
         companyId,
         title: "Blocked issue",
+        description: "## Acceptance Criteria\n\n- Resume once all blockers reach `done`.",
         status: "blocked",
         priority: "medium",
         assigneeAgentId,
@@ -1757,6 +1765,7 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
         id: blockedId,
         companyId,
         title: "Blocked",
+        description: "## Acceptance Criteria\n\n- Must not enter `in_progress` while blockers are unresolved.",
         status: "todo",
         priority: "medium",
         assigneeAgentId,
